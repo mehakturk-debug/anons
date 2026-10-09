@@ -126,6 +126,7 @@
 <audio id="liveAudio" autoplay playsinline></audio>
 
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="anahtar.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -266,7 +267,7 @@ function dial() {
   try { conn = peer.connect(targetId, { reliable: true }); } catch { retry = setTimeout(createPeer, 3000); return; }
   conn.on('open', () => {
     connected = true; attempts = 0;
-    if (!loggedIn) { loggedIn = true; $('lock').classList.add('hide'); $('remote').classList.remove('hide'); loadSounds(); }
+    if (!loggedIn) { loggedIn = true; $('lock').classList.add('hide'); $('remote').classList.remove('hide'); loadSounds(); autoKey($('pin').value.trim()); }
     $('rConn').textContent = 'Bağlı'; $('rConn').className = 'badge on';
     updateMic(); if (stream) startCall();
   });
@@ -344,7 +345,18 @@ async function loadSounds() {
 }
 
 /* ElevenLabs: yaziyi seslendir */
-const xi = { key: store.get('xikey') || '', voice: store.get('xivoice') || '', model: store.get('ximodel') || 'eleven_flash_v2_5' };
+const xi = { key: store.get('xikey') || '', voice: store.get('xivoice') || '', model: store.get('ximodel') || 'eleven_flash_v2_5', embedded: false };
+// anahtar.js icindeki PIN ile sifrelenmis API anahtarini coz
+async function autoKey(pin) {
+  const A = window.ANAHTAR; if (!A || xi.key) return;
+  try {
+    const u = t => Uint8Array.from(atob(t), c => c.charCodeAt(0));
+    const km = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
+    const k = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: u(A.s), iterations: 200000, hash: 'SHA-256' }, km, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+    xi.key = new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: u(A.i) }, k, u(A.d)));
+    xi.embedded = true;
+  } catch {}
+}
 const xmsg = t => $('xiMsg').textContent = t;
 function setVoices(list, sel) {
   const s = $('xiVoice'); s.innerHTML = '';
@@ -356,13 +368,13 @@ async function xiErr(r) {
   catch { return 'Hata ' + r.status; }
 }
 $('cfgOpen').onclick = () => {
-  $('xiKey').value = xi.key; $('xiModel').value = xi.model;
+  $('xiKey').value = xi.embedded ? '' : xi.key; $('xiKey').placeholder = xi.embedded ? 'Gömülü anahtar kullanılıyor' : 'API anahtarı'; $('xiModel').value = xi.model;
   if (xi.voice) setVoices([{ id: xi.voice, name: store.get('xivname') || xi.voice }], xi.voice);
   $('cfg').classList.remove('hide');
 };
 $('xiClose').onclick = () => $('cfg').classList.add('hide');
 $('xiLoad').onclick = async () => {
-  const key = $('xiKey').value.trim(); if (!key) return xmsg('Önce API anahtarını girin');
+  const key = $('xiKey').value.trim() || xi.key; if (!key) return xmsg('Önce API anahtarını girin');
   xmsg('Sesler getiriliyor...');
   try {
     const r = await fetch('https://api.elevenlabs.io/v1/voices', { headers: { 'xi-api-key': key } });
@@ -374,8 +386,9 @@ $('xiLoad').onclick = async () => {
 };
 $('xiSave').onclick = () => {
   const sel = $('xiVoice');
-  xi.key = $('xiKey').value.trim(); xi.voice = sel.value; xi.model = $('xiModel').value;
-  store.set('xikey', xi.key); store.set('xivoice', xi.voice); store.set('ximodel', xi.model);
+  const typed = $('xiKey').value.trim(); if (typed) { xi.key = typed; xi.embedded = false; store.set('xikey', typed); }
+  xi.voice = sel.value; xi.model = $('xiModel').value;
+  store.set('xivoice', xi.voice); store.set('ximodel', xi.model);
   store.set('xivname', sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : '');
   $('cfg').classList.add('hide');
 };
