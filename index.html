@@ -46,7 +46,8 @@
   #ttsRow { display:flex; gap:8px; }
   #ttsOpt { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:14px; color:var(--mut); }
   #ttsOpt select { font:inherit; padding:6px 8px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:inherit; }
-  #ttsSave { padding:6px 12px; font-size:14px; border-radius:8px; }
+  #ttsSave, #ttsUp { padding:6px 12px; font-size:14px; border-radius:8px; }
+  #ttsOpt { flex-wrap:wrap; }
   #ttsText { flex:1; min-width:0; font:inherit; font-size:16px; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:inherit; }
   #ttsGo { flex:0 0 auto; padding:0 16px; }
   #cfg { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; padding:16px; z-index:10; }
@@ -103,7 +104,9 @@
           <option value="1">1.0x (normal)</option><option value="1.1">1.1x</option><option value="1.2">1.2x</option>
         </select>
       </label>
+      <button id="ttsUp" class="ghost">Dosya yükle</button>
       <button id="ttsSave" class="ghost hide">Sisteme kaydet</button>
+      <input id="fileIn" type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac" class="hide">
     </div>
   </div>
   <div id="grid"></div>
@@ -476,21 +479,49 @@ async function ghSave(name, buf, token) {
   if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.message || ('Hata ' + r.status)); }
   return true;
 }
-$('ttsSave').onclick = async () => {
-  if (!lastAudio) return;
-  const n = prompt('Dosya adı (butonda bu görünür):', slug(lastText)); if (!n) return;
-  const name = slug(n) + '.mp3', token = store.get('ghtoken');
-  if (!token) { download(name, lastAudio); $('rState').textContent = 'GitHub anahtarı yok, dosya indirildi'; return; }
-  $('ttsSave').disabled = true; $('rState').textContent = "GitHub'a yükleniyor...";
+function fileSlug(t) {
+  return t.trim().toLocaleLowerCase('tr').replace(/\s+/g, '_').replace(/[^a-z0-9çğıöşü_-]+/g, '_')
+    .replace(/_+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'anons';
+}
+// dosyayi GitHub'a yukle ve kumandada butonu hemen goster
+async function addSound(name, buf, btn) {
+  const token = store.get('ghtoken');
+  if (!token) { $('rState').textContent = 'Önce Ses ayarı > GitHub anahtarı girin'; return false; }
+  btn.disabled = true; $('rState').textContent = "GitHub'a yükleniyor...";
   try {
-    if (await ghSave(name, lastAudio, token)) {
+    if (await ghSave(name, buf, token)) {
       let names = []; try { names = JSON.parse(store.get('snd') || '[]'); } catch {}
       if (!names.includes(name)) names.push(name);
       store.set('snd', JSON.stringify(names)); renderButtons(names);
       $('rState').textContent = name + ' yüklendi, 1-2 dk sonra çalar';
-    } else $('rState').textContent = 'İptal edildi';
+      return true;
+    }
+    $('rState').textContent = 'İptal edildi';
   } catch (e) { $('rState').textContent = 'GitHub: ' + e.message; }
-  finally { $('ttsSave').disabled = false; }
+  finally { btn.disabled = false; }
+  return false;
+}
+$('ttsSave').onclick = async () => {
+  if (!lastAudio) return;
+  const n = prompt('Buton adı (dosya adı olur):', fileSlug(lastText)); if (!n) return;
+  const name = fileSlug(n) + '.mp3';
+  if (!store.get('ghtoken')) { download(name, lastAudio); $('rState').textContent = 'GitHub anahtarı yok, dosya indirildi'; return; }
+  await addSound(name, lastAudio, $('ttsSave'));
+};
+// telefondaki dosyalardan ses sec ve yukle
+$('ttsUp').onclick = () => {
+  if (!store.get('ghtoken')) { $('rState').textContent = 'Önce Ses ayarı > GitHub anahtarı girin'; $('cfgOpen').click(); return; }
+  $('fileIn').click();
+};
+$('fileIn').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  const types = { 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/ogg': 'ogg', 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/aac': 'aac' };
+  const m = f.name.match(/\.(mp3|wav|ogg|m4a|aac)$/i);
+  const ext = m ? m[1].toLowerCase() : types[f.type];
+  if (!ext) { $('rState').textContent = 'Desteklenmeyen biçim (mp3, wav, ogg, m4a, aac)'; return; }
+  if (f.size > 25 * 1024 * 1024) { $('rState').textContent = 'Dosya 25 MB üzerinde, çok büyük'; return; }
+  const n = prompt('Buton adı:', fileSlug(f.name.replace(/\.[^.]+$/, ''))); if (!n) return;
+  await addSound(fileSlug(n) + '.' + ext, await f.arrayBuffer(), $('ttsUp'));
 };
 $('ttsGo').onclick = speak;
 $('rState').onclick = () => { const t = $('rState').textContent; if (t) alert(t); };
