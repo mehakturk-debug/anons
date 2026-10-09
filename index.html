@@ -42,6 +42,15 @@
   #grid button { min-width:0; min-height:0; padding:4px; line-height:1.15; overflow:hidden; word-break:break-word; }
   #grid button:active { filter:brightness(1.25); }
 
+  #ttsRow { flex:0 0 auto; display:flex; gap:8px; }
+  #ttsText { flex:1; min-width:0; font:inherit; font-size:16px; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:inherit; }
+  #ttsGo { flex:0 0 auto; padding:0 16px; }
+  #cfg { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; padding:16px; z-index:10; }
+  #cfg .box { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; width:min(380px,100%); display:flex; flex-direction:column; gap:10px; }
+  #cfg input, #cfg select { font:inherit; padding:10px; border-radius:8px; border:1px solid var(--line); background:transparent; color:inherit; width:100%; }
+  #cfg option { color:#000; }
+  #cfg small { color:var(--mut); }
+
   /* HOPARLOR */
   #player { max-width:560px; margin:0 auto; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:10px; }
@@ -69,14 +78,38 @@
 <div id="remote" class="hide">
   <div id="bar">
     <div class="l"><span class="badge" id="rConn">...</span><span id="rState"></span></div>
-    <button class="ghost" id="logout" style="padding:4px 10px;font-size:13px">Çıkış</button>
+    <div style="display:flex;gap:6px">
+      <button class="ghost" id="cfgOpen" style="padding:4px 10px;font-size:13px">Ses ayarı</button>
+      <button class="ghost" id="logout" style="padding:4px 10px;font-size:13px">Çıkış</button>
+    </div>
   </div>
   <div id="micRow">
     <button id="talk" disabled>Bağlanıyor...</button>
     <button id="stop" class="bad">Durdur</button>
   </div>
+  <div id="ttsRow">
+    <input id="ttsText" type="text" maxlength="300" placeholder="Yazın, seslendirilsin..." autocomplete="off">
+    <button id="ttsGo" class="ok">Seslendir</button>
+  </div>
   <div id="grid"></div>
 </div>
+
+<!-- ElevenLabs ayari -->
+<div id="cfg" class="hide"><div class="box">
+  <b>Yazıyı seslendirme (ElevenLabs)</b>
+  <input id="xiKey" type="password" placeholder="API anahtarı" autocomplete="off">
+  <button id="xiLoad" class="ghost" style="padding:10px">Sesleri getir</button>
+  <select id="xiVoice"></select>
+  <select id="xiModel">
+    <option value="eleven_flash_v2_5">Flash v2.5 (hızlı, genelde daha az kredi)</option>
+    <option value="eleven_multilingual_v2">Multilingual v2 (daha kaliteli)</option>
+  </select>
+  <small id="xiMsg">Anahtar yalnızca bu telefonda saklanır, GitHub'a gitmez.</small>
+  <div style="display:flex;gap:8px">
+    <button id="xiSave" class="ok" style="flex:1;padding:12px">Kaydet</button>
+    <button id="xiClose" class="ghost" style="padding:12px">Kapat</button>
+  </div>
+</div></div>
 
 <!-- HOPARLOR -->
 <div id="player" class="hide">
@@ -145,7 +178,7 @@ function lockError(t) { $('lock').classList.remove('hide'); $('remote').classLis
 function startPlayer(id) {
   $('lock').classList.add('hide'); $('player').classList.remove('hide');
   const snd = $('snd'), liveAudio = $('liveAudio');
-  let peer, queue = [], playing = false, live = false, label = '';
+  let peer, queue = [], playing = false, live = false, label = '', cur = null;
   const conns = new Set();
   const log = t => { const d = document.createElement('div'); d.textContent = new Date().toLocaleTimeString('tr-TR') + '  ' + t; $('log').prepend(d); };
   const broadcast = m => conns.forEach(c => c.open && c.send(m));
@@ -182,6 +215,11 @@ function startPlayer(id) {
       log('Gelen: ' + m.label);
       queue.push(...m.files.map(f => ({ f, label: m.label }))); next();
     }
+    else if (m.t === 'tts' && m.audio) {
+      const url = URL.createObjectURL(new Blob([m.audio], { type: 'audio/mpeg' }));
+      log('Yazıdan anons: ' + m.label);
+      queue.push({ f: url, label: m.label }); next();
+    }
     else if (m.t === 'stop') { queue = []; playing = false; snd.pause(); setState('Boşta'); log('Durduruldu'); }
     else if (m.t === 'live') setLive(!!m.on);
   }
@@ -193,12 +231,12 @@ function startPlayer(id) {
   }
   function next() {
     if (live || playing || !queue.length) return;
-    const it = queue.shift(); label = it.label; playing = true;
+    const it = queue.shift(); cur = it; label = it.label; playing = true;
     setState('Çalıyor: ' + label, 'on');
     snd.src = new URL(it.f, location.href).href;
     snd.play().catch(e => { log('Çalma hatası: ' + e.message); playing = false; next(); });
   }
-  snd.onended = snd.onerror = () => { if (!playing) return; playing = false; if (!queue.length && !live) setState('Boşta'); next(); };
+  snd.onended = snd.onerror = () => { if (!playing) return; if (cur && cur.f.startsWith('blob:')) URL.revokeObjectURL(cur.f); playing = false; if (!queue.length && !live) setState('Boşta'); next(); };
 }
 
 /* ================= KUMANDA (telefon) ================= */
@@ -305,6 +343,62 @@ async function loadSounds() {
   else if (!cached) $('grid').textContent = 'Ses listesi alınamadı';
 }
 
+/* ElevenLabs: yaziyi seslendir */
+const xi = { key: store.get('xikey') || '', voice: store.get('xivoice') || '', model: store.get('ximodel') || 'eleven_flash_v2_5' };
+const xmsg = t => $('xiMsg').textContent = t;
+function setVoices(list, sel) {
+  const s = $('xiVoice'); s.innerHTML = '';
+  list.forEach(v => { const o = document.createElement('option'); o.value = v.id; o.textContent = v.name; s.appendChild(o); });
+  if (sel) s.value = sel;
+}
+async function xiErr(r) {
+  try { const j = await r.json(), d = j.detail; return (d && (d.message || d.status)) || (typeof d === 'string' ? d : 'Hata ' + r.status); }
+  catch { return 'Hata ' + r.status; }
+}
+$('cfgOpen').onclick = () => {
+  $('xiKey').value = xi.key; $('xiModel').value = xi.model;
+  if (xi.voice) setVoices([{ id: xi.voice, name: store.get('xivname') || xi.voice }], xi.voice);
+  $('cfg').classList.remove('hide');
+};
+$('xiClose').onclick = () => $('cfg').classList.add('hide');
+$('xiLoad').onclick = async () => {
+  const key = $('xiKey').value.trim(); if (!key) return xmsg('Önce API anahtarını girin');
+  xmsg('Sesler getiriliyor...');
+  try {
+    const r = await fetch('https://api.elevenlabs.io/v1/voices', { headers: { 'xi-api-key': key } });
+    if (!r.ok) return xmsg(await xiErr(r));
+    const vs = (await r.json()).voices.sort((a, b) => (a.category === 'premade' ? 0 : 1) - (b.category === 'premade' ? 0 : 1));
+    setVoices(vs.map(v => ({ id: v.voice_id, name: v.name + (v.category ? ' (' + v.category + ')' : '') })), xi.voice);
+    xmsg(vs.length + ' ses bulundu. "premade" olanlar ücretsiz planda çalışır.');
+  } catch { xmsg('Bağlantı hatası'); }
+};
+$('xiSave').onclick = () => {
+  const sel = $('xiVoice');
+  xi.key = $('xiKey').value.trim(); xi.voice = sel.value; xi.model = $('xiModel').value;
+  store.set('xikey', xi.key); store.set('xivoice', xi.voice); store.set('ximodel', xi.model);
+  store.set('xivname', sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : '');
+  $('cfg').classList.add('hide');
+};
+async function speak() {
+  const text = $('ttsText').value.trim(); if (!text) return;
+  if (!xi.key || !xi.voice) { $('cfgOpen').click(); return; }
+  if (!connected) { $('rState').textContent = 'Bağlantı yok'; return; }
+  $('ttsGo').disabled = true; $('rState').textContent = 'Ses üretiliyor...';
+  try {
+    const body = { text, model_id: xi.model };
+    if (xi.model === 'eleven_flash_v2_5') body.language_code = 'tr';
+    const r = await fetch('https://api.elevenlabs.io/v1/text-to-speech/' + encodeURIComponent(xi.voice), {
+      method: 'POST', headers: { 'xi-api-key': xi.key, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    if (!r.ok) { $('rState').textContent = 'ElevenLabs: ' + await xiErr(r); return; }
+    send({ t: 'tts', label: text.slice(0, 30), audio: await r.arrayBuffer() });
+    $('ttsText').value = ''; $('rState').textContent = 'Gönderildi';
+  } catch { $('rState').textContent = 'Ses üretilemedi (internet?)'; }
+  finally { $('ttsGo').disabled = false; }
+}
+$('ttsGo').onclick = speak;
+$('ttsText').addEventListener('keydown', e => { if (e.key === 'Enter') speak(); });
+
 /* butonlari ekrana tam sigdir */
 function layout() {
   const g = $('grid'), n = g.children.length; if (!n) return;
@@ -323,6 +417,7 @@ function layout() {
   g.style.fontSize = Math.max(11, Math.min(26, ch * 0.35, cw / (maxLen * 0.62))) + 'px';
 }
 window.addEventListener('resize', layout);
+new ResizeObserver(layout).observe(document.getElementById('grid'));
 </script>
 </body>
 </html>
