@@ -42,7 +42,11 @@
   #grid button { min-width:0; min-height:0; padding:4px; line-height:1.15; overflow:hidden; word-break:break-word; }
   #grid button:active { filter:brightness(1.25); }
 
-  #ttsRow { flex:0 0 auto; display:flex; gap:8px; }
+  #ttsBox { flex:0 0 auto; display:flex; flex-direction:column; gap:6px; }
+  #ttsRow { display:flex; gap:8px; }
+  #ttsOpt { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:14px; color:var(--mut); }
+  #ttsOpt select { font:inherit; padding:6px 8px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:inherit; }
+  #ttsSave { padding:6px 12px; font-size:14px; border-radius:8px; }
   #ttsText { flex:1; min-width:0; font:inherit; font-size:16px; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:inherit; }
   #ttsGo { flex:0 0 auto; padding:0 16px; }
   #cfg { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; padding:16px; z-index:10; }
@@ -87,9 +91,20 @@
     <button id="talk" disabled>Bağlanıyor...</button>
     <button id="stop" class="bad">Durdur</button>
   </div>
-  <div id="ttsRow">
-    <input id="ttsText" type="text" maxlength="300" placeholder="Yazın, seslendirilsin..." autocomplete="off">
-    <button id="ttsGo" class="ok">Seslendir</button>
+  <div id="ttsBox">
+    <div id="ttsRow">
+      <input id="ttsText" type="text" maxlength="300" placeholder="Yazın, seslendirilsin..." autocomplete="off">
+      <button id="ttsGo" class="ok">Seslendir</button>
+    </div>
+    <div id="ttsOpt">
+      <label>Hız
+        <select id="ttsSpeed">
+          <option value="0.7">0.7x</option><option value="0.8">0.8x</option><option value="0.9">0.9x</option>
+          <option value="1">1.0x (normal)</option><option value="1.1">1.1x</option><option value="1.2">1.2x</option>
+        </select>
+      </label>
+      <button id="ttsSave" class="ghost hide">Sisteme kaydet</button>
+    </div>
   </div>
   <div id="grid"></div>
 </div>
@@ -104,9 +119,8 @@
     <option value="eleven_flash_v2_5">Flash v2.5 (hızlı, genelde daha az kredi)</option>
     <option value="eleven_multilingual_v2">Multilingual v2 (daha kaliteli)</option>
   </select>
-  <label style="font-size:14px">Konuşma hızı: <b id="xiSpeedVal">1.00</b>x <small>(0.70 yavaş - 1.20 hızlı)</small></label>
-  <input id="xiSpeed" type="range" min="0.7" max="1.2" step="0.05" value="1" style="padding:0">
-  <small id="xiMsg">Anahtar yalnızca bu telefonda saklanır, GitHub'a gitmez.</small>
+  <input id="ghKey" type="password" placeholder="GitHub anahtarı (sese kalıcı kaydetmek için)" autocomplete="off">
+  <small id="xiMsg">Anahtarlar yalnızca bu telefonda saklanır, GitHub'a yüklenmez.</small>
   <div style="display:flex;gap:8px">
     <button id="xiSave" class="ok" style="flex:1;padding:12px">Kaydet</button>
     <button id="xiClose" class="ghost" style="padding:12px">Kapat</button>
@@ -172,7 +186,7 @@ async function login(gesture) {
     startPlayer(await idFor(pin));
   } else {
     if (gesture) getMic();            // mikrofon iznini giris tiklamasiyla iste
-    startRemote(await idFor(pin));
+    startRemote(await idFor(pin), store.get('pinok') === '1');
   }
 }
 function lockError(t) { $('lock').classList.remove('hide'); $('remote').classList.add('hide'); $('err').textContent = t; $('go').disabled = false; }
@@ -243,11 +257,19 @@ function startPlayer(id) {
 }
 
 /* ================= KUMANDA (telefon) ================= */
-let peer, conn, retry, attempts = 0, loggedIn = false, connected = false, stream, call, micDenied = false, targetId;
+let peer, conn, retry, attempts = 0, loggedIn = false, loaded = false, connected = false, stream, call, micDenied = false, targetId;
 
-function startRemote(id) {
+function startRemote(id, trusted) {
   targetId = id; attempts = 0;
   $('rConn').textContent = 'Bağlanıyor...';
+  if (trusted) {   // PIN daha once dogrulandi: PIN ekranini gosterme, kumandayi hemen ac, baglanmaya devam et
+    loggedIn = true;
+    $('lock').classList.add('hide'); $('remote').classList.remove('hide');
+    try { const c = JSON.parse(store.get('snd') || 'null'); if (c) renderButtons(c); } catch {}
+    updateMic();
+    navigator.permissions && navigator.permissions.query({ name: 'microphone' })
+      .then(p => { if (p.state === 'granted') getMic(); }).catch(() => {});
+  }
   createPeer();
 }
 function createPeer() {
@@ -257,7 +279,7 @@ function createPeer() {
   peer.on('disconnected', () => { try { peer.reconnect(); } catch {} });
   peer.on('error', e => {
     if (e.type === 'peer-unavailable') {
-      attempts++;
+      attempts++; if (loggedIn) { $('rConn').textContent = 'PC aranıyor...'; $('rConn').className = 'badge'; }
       if (!loggedIn && attempts >= 3) { peer.destroy(); return lockError('Bağlanılamadı. PIN yanlış olabilir veya PC\'deki hoparlör açık değil.'); }
       retry = setTimeout(dial, 2000);
     } else if (!loggedIn) { lockError('Bağlantı kurulamadı (' + e.type + ').'); }
@@ -269,7 +291,8 @@ function dial() {
   try { conn = peer.connect(targetId, { reliable: true }); } catch { retry = setTimeout(createPeer, 3000); return; }
   conn.on('open', () => {
     connected = true; attempts = 0;
-    if (!loggedIn) { loggedIn = true; $('lock').classList.add('hide'); $('remote').classList.remove('hide'); loadSounds(); autoKey($('pin').value.trim()); }
+    if (!loggedIn || $('remote').classList.contains('hide')) { loggedIn = true; $('lock').classList.add('hide'); $('remote').classList.remove('hide'); }
+    if (!loaded) { loaded = true; store.set('pinok', '1'); loadSounds(); autoKey($('pin').value.trim()); }
     $('rConn').textContent = 'Bağlı'; $('rConn').className = 'badge on';
     updateMic(); if (stream) startCall();
   });
@@ -314,7 +337,7 @@ talk.addEventListener('pointerdown', async e => {
 talk.addEventListener('contextmenu', e => e.preventDefault());
 
 $('stop').onclick = () => send({ t: 'stop' });
-$('logout').onclick = () => { store.set('pin', ''); location.reload(); };
+$('logout').onclick = () => { if (!confirm('PIN silinsin ve çıkış yapılsın mı?')) return; store.set('pin', ''); store.set('pinok', ''); location.reload(); };
 
 /* ses butonlari: GitHub'daki sounds/ klasorunden otomatik */
 function labelOf(name) {
@@ -370,11 +393,10 @@ async function xiErr(r) {
   catch { return 'Hata ' + r.status; }
 }
 $('cfgOpen').onclick = () => {
-  $('xiKey').value = xi.embedded ? '' : xi.key; $('xiKey').placeholder = xi.embedded ? 'Gömülü anahtar kullanılıyor' : 'API anahtarı'; $('xiModel').value = xi.model; $('xiSpeed').value = xi.speed; $('xiSpeedVal').textContent = xi.speed.toFixed(2);
+  $('xiKey').value = xi.embedded ? '' : xi.key; $('xiKey').placeholder = xi.embedded ? 'Gömülü anahtar kullanılıyor' : 'API anahtarı'; $('ghKey').value = ''; $('ghKey').placeholder = store.get('ghtoken') ? 'GitHub anahtarı kayıtlı (değiştirmek için yazın)' : 'GitHub anahtarı (sese kalıcı kaydetmek için)'; $('xiModel').value = xi.model;
   if (xi.voice) setVoices([{ id: xi.voice, name: store.get('xivname') || xi.voice }], xi.voice);
   $('cfg').classList.remove('hide');
 };
-$('xiSpeed').oninput = e => { $('xiSpeedVal').textContent = (+e.target.value).toFixed(2); };
 $('xiClose').onclick = () => $('cfg').classList.add('hide');
 $('xiLoad').onclick = async () => {
   const key = $('xiKey').value.trim() || xi.key; if (!key) return xmsg('Önce API anahtarını girin');
@@ -390,7 +412,8 @@ $('xiLoad').onclick = async () => {
 $('xiSave').onclick = () => {
   const sel = $('xiVoice');
   const typed = $('xiKey').value.trim(); if (typed) { xi.key = typed; xi.embedded = false; store.set('xikey', typed); }
-  xi.voice = sel.value; xi.model = $('xiModel').value; xi.speed = +$('xiSpeed').value; store.set('xispeed', xi.speed);
+  const gt = $('ghKey').value.trim(); if (gt) store.set('ghtoken', gt);
+  xi.voice = sel.value; xi.model = $('xiModel').value;
   store.set('xivoice', xi.voice); store.set('ximodel', xi.model);
   store.set('xivname', sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : '');
   $('cfg').classList.add('hide');
@@ -401,17 +424,74 @@ async function speak() {
   if (!connected) { $('rState').textContent = 'Bağlantı yok'; return; }
   $('ttsGo').disabled = true; $('rState').textContent = 'Ses üretiliyor...';
   try {
-    const body = { text, model_id: xi.model, voice_settings: { stability: 0.5, similarity_boost: 0.75, speed: xi.speed } };
+    const body = { text, model_id: xi.model, voice_settings: { stability: 0.5, similarity_boost: 0.75, speed: +$('ttsSpeed').value } };
     if (xi.model === 'eleven_flash_v2_5') body.language_code = 'tr';
     const r = await fetch('https://api.elevenlabs.io/v1/text-to-speech/' + encodeURIComponent(xi.voice), {
       method: 'POST', headers: { 'xi-api-key': xi.key, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     });
     if (!r.ok) { $('rState').textContent = 'ElevenLabs: ' + await xiErr(r); return; }
-    send({ t: 'tts', label: text.slice(0, 30), audio: await r.arrayBuffer() });
+    const buf = await r.arrayBuffer();
+    lastAudio = buf.slice(0); lastText = text; $('ttsSave').classList.remove('hide');
+    send({ t: 'tts', label: text.slice(0, 30), audio: buf });
     $('ttsText').value = ''; $('rState').textContent = 'Gönderildi';
   } catch { $('rState').textContent = 'Ses üretilemedi (internet?)'; }
   finally { $('ttsGo').disabled = false; }
 }
+// hiz secimi (telefonda hatirlanir)
+{ const sp = [0.7, 0.8, 0.9, 1, 1.1, 1.2];
+  xi.speed = sp.reduce((a, b) => Math.abs(b - xi.speed) < Math.abs(a - xi.speed) ? b : a);
+  $('ttsSpeed').value = String(xi.speed);
+  $('ttsSpeed').onchange = () => { xi.speed = +$('ttsSpeed').value; store.set('xispeed', xi.speed); }; }
+
+// son uretilen sesi mp3 olarak indir (GitHub'daki sounds/ klasorune yuklenince buton olur)
+let lastAudio = null, lastText = '';
+function slug(t) {
+  return t.toLocaleLowerCase('tr').replace(/ç/g, 'c').replace(/ğ/g, 'g').replace(/ı/g, 'i').replace(/ö/g, 'o')
+    .replace(/ş/g, 's').replace(/ü/g, 'u').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30) || 'anons';
+}
+function download(name, buf) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([buf], { type: 'audio/mpeg' })); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function ghRepo() {
+  const user = location.hostname.split('.')[0];
+  let seg = location.pathname.split('/')[1] || ''; if (seg.endsWith('.html')) seg = '';
+  return { user, repo: seg || location.hostname };
+}
+function b64(buf) {
+  let t = ''; const u = new Uint8Array(buf);
+  for (let i = 0; i < u.length; i += 0x8000) t += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+  return btoa(t);
+}
+async function ghSave(name, buf, token) {
+  const { user, repo } = ghRepo();
+  const url = `https://api.github.com/repos/${user}/${repo}/contents/sounds/${encodeURIComponent(name)}`;
+  const H = { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' };
+  let sha;
+  const g = await fetch(url, { headers: H });
+  if (g.ok) { if (!confirm(name + ' zaten var. Üzerine yazılsın mı?')) return false; sha = (await g.json()).sha; }
+  const r = await fetch(url, { method: 'PUT', headers: H, body: JSON.stringify({ message: 'Anons eklendi: ' + name, content: b64(buf), sha }) });
+  if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.message || ('Hata ' + r.status)); }
+  return true;
+}
+$('ttsSave').onclick = async () => {
+  if (!lastAudio) return;
+  const n = prompt('Dosya adı (butonda bu görünür):', slug(lastText)); if (!n) return;
+  const name = slug(n) + '.mp3', token = store.get('ghtoken');
+  if (!token) { download(name, lastAudio); $('rState').textContent = 'GitHub anahtarı yok, dosya indirildi'; return; }
+  $('ttsSave').disabled = true; $('rState').textContent = "GitHub'a yükleniyor...";
+  try {
+    if (await ghSave(name, lastAudio, token)) {
+      let names = []; try { names = JSON.parse(store.get('snd') || '[]'); } catch {}
+      if (!names.includes(name)) names.push(name);
+      store.set('snd', JSON.stringify(names)); renderButtons(names);
+      $('rState').textContent = name + ' yüklendi, 1-2 dk sonra çalar';
+    } else $('rState').textContent = 'İptal edildi';
+  } catch (e) { $('rState').textContent = 'GitHub: ' + e.message; }
+  finally { $('ttsSave').disabled = false; }
+};
 $('ttsGo').onclick = speak;
 $('rState').onclick = () => { const t = $('rState').textContent; if (t) alert(t); };
 $('ttsText').addEventListener('keydown', e => { if (e.key === 'Enter') speak(); });
