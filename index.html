@@ -104,6 +104,8 @@
     <option value="eleven_flash_v2_5">Flash v2.5 (hızlı, genelde daha az kredi)</option>
     <option value="eleven_multilingual_v2">Multilingual v2 (daha kaliteli)</option>
   </select>
+  <label style="font-size:14px">Konuşma hızı: <b id="xiSpeedVal">1.00</b>x <small>(0.70 yavaş - 1.20 hızlı)</small></label>
+  <input id="xiSpeed" type="range" min="0.7" max="1.2" step="0.05" value="1" style="padding:0">
   <small id="xiMsg">Anahtar yalnızca bu telefonda saklanır, GitHub'a gitmez.</small>
   <div style="display:flex;gap:8px">
     <button id="xiSave" class="ok" style="flex:1;padding:12px">Kaydet</button>
@@ -345,7 +347,7 @@ async function loadSounds() {
 }
 
 /* ElevenLabs: yaziyi seslendir */
-const xi = { key: store.get('xikey') || '', voice: store.get('xivoice') || '', model: store.get('ximodel') || 'eleven_flash_v2_5', embedded: false };
+const xi = { key: store.get('xikey') || '', voice: store.get('xivoice') || '', model: store.get('ximodel') || 'eleven_flash_v2_5', speed: parseFloat(store.get('xispeed')) || 1, embedded: false };
 // anahtar.js icindeki PIN ile sifrelenmis API anahtarini coz
 async function autoKey(pin) {
   const A = window.ANAHTAR; if (!A || xi.key) return;
@@ -368,10 +370,11 @@ async function xiErr(r) {
   catch { return 'Hata ' + r.status; }
 }
 $('cfgOpen').onclick = () => {
-  $('xiKey').value = xi.embedded ? '' : xi.key; $('xiKey').placeholder = xi.embedded ? 'Gömülü anahtar kullanılıyor' : 'API anahtarı'; $('xiModel').value = xi.model;
+  $('xiKey').value = xi.embedded ? '' : xi.key; $('xiKey').placeholder = xi.embedded ? 'Gömülü anahtar kullanılıyor' : 'API anahtarı'; $('xiModel').value = xi.model; $('xiSpeed').value = xi.speed; $('xiSpeedVal').textContent = xi.speed.toFixed(2);
   if (xi.voice) setVoices([{ id: xi.voice, name: store.get('xivname') || xi.voice }], xi.voice);
   $('cfg').classList.remove('hide');
 };
+$('xiSpeed').oninput = e => { $('xiSpeedVal').textContent = (+e.target.value).toFixed(2); };
 $('xiClose').onclick = () => $('cfg').classList.add('hide');
 $('xiLoad').onclick = async () => {
   const key = $('xiKey').value.trim() || xi.key; if (!key) return xmsg('Önce API anahtarını girin');
@@ -387,7 +390,7 @@ $('xiLoad').onclick = async () => {
 $('xiSave').onclick = () => {
   const sel = $('xiVoice');
   const typed = $('xiKey').value.trim(); if (typed) { xi.key = typed; xi.embedded = false; store.set('xikey', typed); }
-  xi.voice = sel.value; xi.model = $('xiModel').value;
+  xi.voice = sel.value; xi.model = $('xiModel').value; xi.speed = +$('xiSpeed').value; store.set('xispeed', xi.speed);
   store.set('xivoice', xi.voice); store.set('ximodel', xi.model);
   store.set('xivname', sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].textContent : '');
   $('cfg').classList.add('hide');
@@ -398,7 +401,7 @@ async function speak() {
   if (!connected) { $('rState').textContent = 'Bağlantı yok'; return; }
   $('ttsGo').disabled = true; $('rState').textContent = 'Ses üretiliyor...';
   try {
-    const body = { text, model_id: xi.model };
+    const body = { text, model_id: xi.model, voice_settings: { stability: 0.5, similarity_boost: 0.75, speed: xi.speed } };
     if (xi.model === 'eleven_flash_v2_5') body.language_code = 'tr';
     const r = await fetch('https://api.elevenlabs.io/v1/text-to-speech/' + encodeURIComponent(xi.voice), {
       method: 'POST', headers: { 'xi-api-key': xi.key, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
@@ -410,6 +413,7 @@ async function speak() {
   finally { $('ttsGo').disabled = false; }
 }
 $('ttsGo').onclick = speak;
+$('rState').onclick = () => { const t = $('rState').textContent; if (t) alert(t); };
 $('ttsText').addEventListener('keydown', e => { if (e.key === 'Enter') speak(); });
 
 /* butonlari ekrana tam sigdir */
